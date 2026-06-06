@@ -29,6 +29,9 @@ Focus: just `expand` and `apply` for treating groups of Blocks as one "thick" ed
 This is extracted and simplified from ai-desk/v2 primitives.
 
 ## Usage
+
+Basic local case (everything in one process):
+
 ```js
 import { Graph, Block, expand, apply } from './core.js';
 
@@ -38,19 +41,53 @@ const b1 = new Block({ id: 'mod:fn:foo', type: 'function' });
 b1.commit({ content: 'function foo() { return 1; }' });
 g.add(b1);
 
-// Expand to thick view
+// Expand to thick view (the editing tool's read)
 const view = expand(g, 'mod:fn:foo');
-console.log(view); // the virtual heavy string
+console.log(view);
 
-// Edit the content part (imagine LLM or human edits the body)
+// Edit the text (human or AI)
 const edited = view.replace('return 1;', 'return 42;');
 
-// Apply back
+// Apply back (local)
 const updates = apply(g, 'mod:fn:foo', edited);
-console.log(updates);
 ```
 
-See core.js for the full (minimal) primitives.
+**Real usage (browser UI, servers, automation, remote authority)**
+
+The thick editing tool (expand → edit text → apply) is meant to be the primary way to touch yume state/code.
+
+When the real Graph lives on a server / DO / another context, turn the edited text into a command and send it over your write pipeline:
+
+```js
+import { makeThickEdit, applyThickEdit } from './core.js';
+
+const cmd = makeThickEdit({
+  root: 'mod:fn:foo',
+  content: edited,
+  opts: { depth: 2 }
+});
+
+// Send `cmd` over WS / postMessage / whatever your pipeline is.
+// The authority side (the one that actually owns the Graph) does:
+const result = applyThickEdit(authorityGraph, cmd);
+```
+
+This pattern is what makes the editing tool automatable and ensures edits reach the authoritative code instead of only a local replica.
+
+See the comment block near the top of `core.js` (search for "First-sight key") and the `makeThickEdit` / `applyThickEdit` section right after `heavyApply`.
+
+## AI Self-Check (simple)
+
+After reading the Usage section + core.js top-to-bottom, you should be able to state clearly and simply:
+
+- The editing tool's **read** is `expand(...)` — it gives the thick text view.
+- The **official write** for that tool is a portable command made with `makeThickEdit({ root, content, opts })`.
+- Clients (browser UI, scripts, agents) send this command over the pipeline.
+- The authority (the one holding the real Graph) executes it with `applyThickEdit(realGraph, cmd)`.
+- Calling `apply()` directly on a client-side graph only changes a local replica — it does **not** affect real/authoritative state.
+- This command form is what makes the thick editing tool actually work across browser/server boundaries and makes it automatable.
+
+If you can't say the above in your own words without looking, re-read the "First-sight key" at the top of core.js and the section above.
 
 ## Current Status (start of yume-lite)
 - Focused on **expand + apply** only (as discussed).
@@ -62,6 +99,12 @@ See core.js for the full (minimal) primitives.
 The small surface area is deliberate: the whole transparent model can be grasped quickly by an AI without navigating capsules or distributed docs.
 
 Run: `node example.js`
+
+より実践的な「制約駆動の完全フロー」（manifest + 駆動定義Block + 推奨規律 getSurface/skeleton/getImpact → expand/edit/apply → derive の一連の流れ）は、公式サンプルを参照：
+
+```
+node yume-lite/examples/constraint-simple/run.js
+```
 
 E2E: `npm test` or `node e2e.js` (core tests + constraint template tests)
 
@@ -140,6 +183,11 @@ const filtered = evalConstraint(cb, {fee:700});
 e2e でもこのテンプレートを使ってテストしています。
 
 このパターンは「複雑にしたくない」範囲で非常に強力です。特にバリアント生成、ポリシー、ルール系の状態で有効です。
+
+**より完全な実践例（yume との統合）**:
+- `yume-lite/examples/constraint-simple/` （見積もりドメインで、制約定義を Block の一次ソースにし、expand/apply で駆動変数だけを編集 → derive で状態を再構築するフルストーリー）
+- これは yume-lite に同梱の「一番わかりやすい」公式サンプルです。まずはこれを実行して体感してください。
+- より大規模・本格的な例は別プロジェクト `yume-constraint-voxel` を参照（Snow-Ball テスト方法論も含む）。
 
 ### Execution Model（基本ループ）
 入力制約関数で入力を状態データに変換 → 状態管理制約関数で次の完全な状態を導出 → commit（新しいバージョンとして実行）。

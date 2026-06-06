@@ -1,4 +1,4 @@
-import { Graph, Block, expand, apply, skeleton, readPartial, getSurface, getImpact } from './core.js';
+import { Graph, Block, expand, apply, skeleton, readPartial, getSurface, getImpact, makeThickEdit, applyThickEdit } from './core.js';
 // Constraint folding is kept as a separate living template (動く典型的なテンプレート).
 // Import from the template when you want to use the pattern.
 import { constraintBlock, evalConstraint } from './constraint-template.js';
@@ -41,7 +41,7 @@ console.log(view);
 let edited = view.replace("console.log('hello');", "console.log('yume-lite!');");
 edited = edited.replace('return 42;', 'return 99;');
 
-// 3. APPLY back
+// 3. APPLY back (direct, when you have the graph locally)
 const updates = apply(g, 'example:fn:main', edited, { depth: 2 });
 console.log('\nAPPLY UPDATES:');
 console.log(updates);
@@ -49,6 +49,32 @@ console.log(updates);
 // Show new head
 console.log('\nNEW HEAD content:');
 console.log(g.get('example:fn:main').content);
+
+// === Thick Edit as the official write for the editing tool ===
+// This is the part first-time readers should notice for anything involving
+// browser UIs, servers, agents, or automation.
+//
+// expand gives the thick view.
+// After editing the text, do NOT just call apply() on whatever Graph you have locally
+// (it may be only a replica).
+//
+// Instead, create a portable command and submit it through your write pipeline.
+// The real authority then applies it with applyThickEdit.
+
+console.log('\n=== Thick Edit Command (official write path) ===');
+
+const editCmd = makeThickEdit({
+  root: 'example:fn:main',
+  content: edited,
+  opts: { depth: 2 }
+});
+console.log('Portable command to send over WS/postMessage/etc:');
+console.log(editCmd);
+
+// Authority side (server, host context, etc.):
+const authorityGraph = new Graph([ /* ... real blocks ... */ ]); // in this demo we reuse g
+const cmdResult = applyThickEdit(g, editCmd);
+console.log('Result of applyThickEdit on authority:', cmdResult);
 
 // Demonstrate read for history (lite keeps last ~32)
 console.log('\nRead history:');
@@ -129,3 +155,10 @@ console.log('\ngetImpact (who would be affected by changing helper?):');
 console.log(impact);
 
 console.log('\nRule: skeleton/getSurface first → getImpact to decide scope → only then targeted expand/apply.');
+
+// === Next step: real constraint-driven integration ===
+// The example above shows the cartesian constraint-template lightly.
+// For a full, easy-to-understand worked example of "put driving constraints
+// in a yume Block as the editable surface, then derive full state after apply",
+// see the official bundled sample:
+console.log('\nNext: より実践的な constraint-driven サンプル → yume-lite/examples/constraint-simple/run.js');

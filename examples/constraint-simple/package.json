@@ -1,0 +1,19 @@
+{
+  "name": "yume-constraint-simple",
+  "version": "0.1.0",
+  "description": "Official yume-lite example: constraint-driven state derivation distilled into the easiest possible sample. (bundled under yume-lite/examples/constraint-simple). Extracted essence from yume-constraint-voxel. Focus: tiny readable driving constraints in Blocks + pure derive for full state + full recommended yume flow (getSurface/skeleton/expand/apply + derive).",
+  "type": "module",
+  "scripts": {
+    "demo": "node run.js",
+    "start": "node run.js"
+  },
+  "keywords": [
+    "yume-lite",
+    "constraint",
+    "derive",
+    "sample",
+    "essence",
+    "usd"
+  ],
+  "license": "MIT"
+}
