@@ -11,7 +11,7 @@
 // 1ファイルE2Eで全体をクリアに保つ（yume-liteのclearify思想に準拠）。
 
 import { strict as assert } from 'node:assert';
-import { Graph, Block, expand, apply, domainTag, parseDomainTag, DOMAINS, skeleton, readPartial, getSurface, getImpact } from './core.js';
+import { Graph, Block, expand, apply, domainTag, parseDomainTag, DOMAINS, skeleton, readPartial, getSurface, getImpact, sameArr, sameRefs } from './core.js';
 // Constraint tests use the canonical living template (not core).
 import { constraintBlock, evalConstraint } from './constraint-template.js';
 
@@ -644,6 +644,30 @@ group('e2e-snow-ball growth (core paths)', () => {
     b.commit({ content: 'exact(){}' });
     const res = b.applyPatch('exact(){}');
     assert.equal(res.action, 'unchanged');
+  });
+
+  // Direct tests for the pure helpers (to nail the remaining byte ranges in e2e-snow-ball)
+  test('sameArr covers equal / length-diff / element-diff', () => {
+    assert.equal(sameArr([1,2], [1,2]), true);
+    assert.equal(sameArr([1,2], [1,2,3]), false);
+    assert.equal(sameArr([1,2], [1,99]), false);
+    assert.equal(sameArr([], []), true);
+  });
+
+  test('sameRefs covers equal / length / kind-target diff', () => {
+    const a = [{kind:'calls', target:'x'}, {kind:'imports', target:'y'}];
+    const b = [{kind:'calls', target:'x'}, {kind:'imports', target:'y'}];
+    const c = [{kind:'calls', target:'x'}];
+    const d = [{kind:'calls', target:'z'}];
+    assert.equal(sameRefs(a, b), true);
+    assert.equal(sameRefs(a, c), false);
+    assert.equal(sameRefs(a, d), false);
+  });
+
+  test('Block constructor + read on empty versions', () => {
+    const b = new Block({ id: 'empty:ver', type: 'data' });
+    assert.equal(b.read(-1), null);
+    assert.equal(b.readContent(0), null);
   });
 });
 
