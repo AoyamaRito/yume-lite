@@ -1,0 +1,12 @@
+# dependencies
+node_modules/
+
+# testing / coverage
+coverage/
+.nyc_output/
+
+# misc
+*.log
+.DS_Store
+*.swp
+*~

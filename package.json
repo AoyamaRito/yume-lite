@@ -1,0 +1,14 @@
+{
+  "name": "yume-lite",
+  "version": "0.2.0",
+  "description": "yume-lite: stable minimal core for the yume conventions. Focus: expand/apply (Virtual Heavy), domain-tagged values, capped append-only history (last 32), skeleton/readPartial for tokens, and simple Constraint Folding. For AI-friendly development without heavy mental load.",
+  "type": "module",
+  "main": "core.js",
+  "scripts": {
+    "test": "node e2e.js",
+    "e2e": "node e2e.js"
+  },
+  "keywords": ["yume", "virtual-heavy", "block", "graph", "ai-editing"],
+  "author": "AoyamaRito",
+  "license": "MIT"
+}
