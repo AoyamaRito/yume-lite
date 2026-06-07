@@ -1,4 +1,4 @@
-import { Graph, Block, expand, apply, skeleton, readPartial, getSurface, getImpact, makeThickEdit, applyThickEdit } from './core.js';
+import { Graph, Block, expand, apply, skeleton, readPartial, getSurface, getImpact, makeThickEdit, applyThickEdit, lintThickView } from './core.js';
 // Constraint folding is kept as a separate living template (動く典型的なテンプレート).
 // Import from the template when you want to use the pattern.
 import { constraintBlock, evalConstraint } from './constraint-template.js';
@@ -75,6 +75,20 @@ console.log(editCmd);
 const authorityGraph = new Graph([ /* ... real blocks ... */ ]); // in this demo we reuse g
 const cmdResult = applyThickEdit(g, editCmd);
 console.log('Result of applyThickEdit on authority:', cmdResult);
+
+// === Header discipline LINT demo ===
+console.log('\n=== Header discipline LINT (lintThickView) ===');
+console.log('AIが厚いビューを編集した直後に呼べる。applyする前にヘッダー違反を検知できる。');
+
+const cleanLint = lintThickView(edited, { original: view });
+console.log('正しい編集 (本文だけ):', cleanLint.ok ? 'OK' : 'NG', '-', cleanLint.advice);
+
+const badHeader = view.replace('hash=4f2444c5', 'hash=DEADBEEF'); // ヘッダーいじりシミュレーション
+const badLint = lintThickView(badHeader, { original: view });
+console.log('ヘッダー改変を検知:', badLint.ok ? 'OK (見逃し)' : 'NG (検知成功)');
+if (badLint.violations.length > 0) {
+  console.log('  violation例:', badLint.violations[0].message.split('\n')[0]);
+}
 
 // Demonstrate read for history (lite keeps last ~32)
 console.log('\nRead history:');

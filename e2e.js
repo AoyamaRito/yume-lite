@@ -1,17 +1,20 @@
-// yume-lite/e2e.js — aggressive e2e tests for lite version
-// Focus: expand + apply + domain-tagged as core
+// yume-lite/e2e.js — aggressive single-file E2E
 //
-// テスト成長プロセス名: e2e-snow-ball
-//   (E2Eスノーボール / クリアファイ・スノーボール)
-//   1. 既存の強力なE2Eから始める (e2e)
-//   2. 単体テストを実装 (単体テスト実装)
-//   3. その単体をこのE2Eファイルの中で「ついでに」テスト・チェック (e2eのなかでついでにチェック)
-//   4. E2Eケースを増やし続け、対象単体の実質100%カバーになるまでE2Eを育てる (100%単体カバーまでe2e増やす)
-// git push 前にはこの e2e-snow-ball プロセスを回す。
-// 1ファイルE2Eで全体をクリアに保つ（yume-liteのclearify思想に準拠）。
+// ここでは1つのE2Eを大きく育てていく。
+// 新しいコードを書いたら、その振る舞いをこのE2Eの中に「ついでに」テストとして追加していく。
+// （これをプロジェクト内では e2e-snow-ball と呼んでいる）
+// git push 前には必ずこのE2Eを回す。
+//
+// その中で、制約駆動の1フレーム論理（入力＋状態変数 → 制約関数で状態書き換え＋導出）を
+// テストするときは、純粋にその論理の正しさだけを見る書き方をする。
+// 関数型プログラミングなどで「derive / reducer のロジックだけをテストする」やり方と
+// よく似ている。
+// （プロジェクト内ではこのスタイルを e2e制約ロジカル と呼んでいる）
+//
+// 「1ファイルE2Eで全体をクリアに保つ」ことを重視している。
 
 import { strict as assert } from 'node:assert';
-import { Graph, Block, expand, apply, domainTag, parseDomainTag, DOMAINS, skeleton, readPartial, getSurface, getImpact, sameArr, sameRefs } from './core.js';
+import { Graph, Block, expand, apply, domainTag, parseDomainTag, DOMAINS, skeleton, readPartial, getSurface, getImpact, sameArr, sameRefs, lintThickView } from './core.js';
 // Constraint tests use the canonical living template (not core).
 import { constraintBlock, evalConstraint } from './constraint-template.js';
 
@@ -82,6 +85,12 @@ group('Basic Virtual Heavy', () => {
       .replace('function a(){ return 1; }', 'function a(){ return 100; }')
       .replace('function b(){ return a() + 1; }', 'function b(){ return a() * 2; }')
       .replace('function c(){ return b() + a(); }', 'function c(){ return b() * 10; }');
+
+    // Recommended workflow: after editing thick view, run lint before apply
+    const lint = lintThickView(newContent, { original: expanded });
+    assert.equal(lint.ok, true, 'lint should pass on valid body-only edit');
+    assert.equal(lint.count, 0);
+
     const updates = apply(g, 'm:fn:c', newContent);
     assert.equal(g.get('m:fn:a').content, 'function a(){ return 100; }');
     assert.equal(g.get('m:fn:b').content, 'function b(){ return a() * 2; }');
@@ -110,6 +119,11 @@ group('Basic Virtual Heavy', () => {
     const g = fixture();
     const before = g.get('m:fn:b').versions.length;
     const expanded = expand(g, 'm:fn:c');
+
+    // Include lint in the unchanged roundtrip path (part of recommended discipline)
+    const lint = lintThickView(expanded, { original: expanded });
+    assert.equal(lint.ok, true);
+
     const updates = apply(g, 'm:fn:c', expanded);
     const after = g.get('m:fn:b').versions.length;
     assert.equal(updates.length, 3);
@@ -121,6 +135,11 @@ group('Basic Virtual Heavy', () => {
     const g = fixture();
     const before = ['m:fn:a', 'm:fn:b', 'm:fn:c'].map(id => g.get(id).versions.length);
     const expanded = expand(g, 'm:fn:c');
+
+    // Exercise the full recommended flow: expand → lint → apply
+    const lint = lintThickView(expanded, { original: expanded });
+    assert.equal(lint.ok, true, 'lint must pass on untouched expanded view');
+
     const updates = apply(g, 'm:fn:c', expanded);
     const after = ['m:fn:a', 'm:fn:b', 'm:fn:c'].map(id => g.get(id).versions.length);
     for (const u of updates) assert.equal(u.action, 'unchanged');
@@ -672,9 +691,79 @@ group('e2e-snow-ball growth (core paths)', () => {
 });
 
 // ============================================================
-// Constraint Folding (A2) — if-else mountain to single constraint fn
+// e2e制約ロジカル（One-frame logical constraint derivation）
 // ============================================================
+// snow-ball（テスト成長プロセス）とは別。
+//
+// ここでいう「e2e制約ロジカル」とは：
+//   1フレームの「入力 + 現在の状態変数」を制約関数に入力として与え、
+//   - 状態変数を書き換え
+//   - 同時に「現在のステート（導出された完全な状態）」を出す
+//   という論理過程そのものを、E2Eで純粋にロジカルにテストするスタイル。
+//   似た考え方は関数型プログラミングの純粋導出関数のテストなどに見られる。
+//
+// 目的:
+//   - 状態は直接触らない。制約関数の出力として正確に導出される。
+//   - その「1フレームのロジックだけ」をE2Eで縛る（thick editingの詳細や
+//     全体カバレッジには依存せず、論理的正しさを検証）。
+//   - 実行モデルの基本ループ（READMEの Execution Model）をE2Eで支える。
+//
+// 参考:
+//   - README の "Execution Model（基本ループ）"
+//   - yume-lite/examples/constraint-simple/ （一番わかりやすい公式実例）
+//   - constraint-template.js （combinatorial が必要なときの汎用テンプレート）
+//
+// 以下はテンプレートの機械的テスト + ロジカル過程の統合テスト。
+// 本来の「e2e制約ロジカル」は、1フレームの入力→状態更新+導出の論理だけを
+// 見るテストとして育てることを意図している。
 group('Constraint Folding (A2)', () => {
+  // --- e2e制約ロジカル の最小例（1フレームの論理過程に集中） ---
+  // snow-ballとは関係なく、「1フレームで入力+状態変数 → 制約関数で状態書き換え + 同時導出」
+  // というロジカルな過程だけをE2Eでテストする。
+  test('e2e制約ロジカル: one frame input + state vars → rewrite + derive current state', () => {
+    // 現在の状態変数（これがBlockに保存されているイメージ）
+    const currentStateVars = {
+      base: 100,
+      multiplier: 1.0,
+    };
+
+    // このフレームの入力
+    const frameInput = {
+      delta: 30,
+      boost: true,
+    };
+
+    // 制約関数（入力 + 状態変数を受け取り、状態変数を更新しつつ現在のステートを導出）
+    const deriveFrameState = (input, stateVars) => {
+      // 状態変数の書き換え
+      const newStateVars = {
+        ...stateVars,
+        base: stateVars.base + input.delta,
+        multiplier: input.boost ? 1.5 : stateVars.multiplier,
+      };
+
+      // 同時に現在の完全なステートを導出（これが「今の状態」として使われる）
+      const derivedCurrentState = {
+        effective: newStateVars.base * newStateVars.multiplier,
+        isBoosted: input.boost,
+        // domain tag で自己記述的に
+        value: domainTag('count', newStateVars.base),
+      };
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    const { newStateVars, derivedCurrentState } = deriveFrameState(frameInput, currentStateVars);
+
+    // e2e制約ロジカルとして、ここでは「論理的正しさ」だけをassert
+    // （thick viewの編集詳細や、snow-ballカバレッジには依存しない）
+    assert.equal(newStateVars.base, 130);
+    assert.equal(newStateVars.multiplier, 1.5);
+    assert.equal(derivedCurrentState.effective, 195);
+    assert.equal(derivedCurrentState.isBoosted, true);
+    assert.ok(derivedCurrentState.value.startsWith('count:'));
+  });
+
   test('constraintBlock + evalConstraint basic', () => {
     const cb = constraintBlock({
       id: 'fee:cb',
@@ -999,6 +1088,11 @@ function a(){ return 2; }
     const g = fx();
     const orig = expand(g, 'i:b');
     const edited = orig.replace('return 1;', 'return 42;');
+
+    // Include lint as part of the core edit flow in E2E
+    const lint = lintThickView(edited, { original: orig });
+    assert.equal(lint.ok, true);
+
     const res = apply(g, 'i:b', edited);
     assert.equal(res.ok, true);
     assert.ok(res.find(u => u.id === 'i:a').action === 'updated');
@@ -1033,6 +1127,64 @@ function a(){ return 2; }
     assert.equal(a.status, 'header-tamper');
     assert.equal(b.action, 'updated');
     assert.ok(g.get('i:b').content.includes('return a() + 1;'));
+  });
+});
+
+// ============================================================
+// Header discipline LINT (lintThickView) — e2e-snow-ball growth
+// These are the specific edge-case tests for lint itself.
+// The main "lint as part of normal thick edit flow" is exercised inside
+// the Basic Virtual Heavy and Integrity groups above (e2e-snow-ball style).
+// ============================================================
+group('Header Discipline LINT', () => {
+  function makeSimple() {
+    const g = new Graph();
+    const b = new Block({ id: 'l:fn', type: 'function' });
+    b.commit({ content: 'function l(){ return 1; }' });
+    g.add(b);
+    return { g, original: expand(g, 'l:fn') };
+  }
+
+  test('clean body edit passes lint (with original)', () => {
+    const { original } = makeSimple();
+    const edited = original.replace('return 1;', 'return 99;');
+    const r = lintThickView(edited, { original });
+    assert.equal(r.ok, true);
+    assert.equal(r.count, 0);
+  });
+
+  test('changing hash= on header is detected via original comparison', () => {
+    const { original } = makeSimple();
+    // Change only the close header's hash value (typical slip near the end of a block)
+    const bad = original.replace(/hash=[0-9a-f]+(?=[\s\S]*<<< \/BLOCK l:fn)/, 'hash=DEADBEEF');
+    const r = lintThickView(bad, { original });
+    assert.equal(r.ok, false);
+    assert.ok(r.violations.some(v => v.kind === 'header-line-modified' || v.message.includes('ヘッダー')));
+  });
+
+  test('mismatched open/close hash (structural tamper) is reported', () => {
+    const { original } = makeSimple();
+    // Only change the close hash, keep open as-is (common AI slip)
+    const bad = original.replace(/<<< \/BLOCK l:fn hash=[0-9a-f]+/, '<<< /BLOCK l:fn hash=deadbeef');
+    const r = lintThickView(bad);
+    assert.equal(r.ok, false);
+    assert.ok(r.violations.some(v => v.kind === 'header-tamper' || v.message.includes('ヘッダー')));
+  });
+
+  test('lint without original still catches open vs close mismatch', () => {
+    const { original } = makeSimple();
+    const bad = original.replace('return 1;', 'return 99;')
+                        .replace(/<<< \/BLOCK l:fn hash=([0-9a-f]+)/, '<<< /BLOCK l:fn hash=wrong$1');
+    const r = lintThickView(bad);
+    assert.equal(r.ok, false);
+  });
+
+  test('missing close is reported', () => {
+    const { original } = makeSimple();
+    const bad = original.replace(/\/\/ <<< \/BLOCK l:fn .*$/m, '');
+    const r = lintThickView(bad);
+    assert.equal(r.ok, false);
+    assert.ok(r.violations.some(v => v.message.includes('閉じタグ') || v.kind === 'block-no-close'));
   });
 });
 

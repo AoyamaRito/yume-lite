@@ -109,12 +109,16 @@ node yume-lite/examples/constraint-simple/run.js
 E2E: `npm test` or `node e2e.js` (core tests + constraint template tests)
 
 **Pre-git ritual: e2e-snow-ball**
-Before committing, run the e2e-snow-ball process:
-- Start with the strong E2E
-- Implement units (or new modules like templates)
-- Add their tests inside this E2E (so they are checked "ついでに")
-- Grow E2E cases until the changed units reach real 100% behavioral coverage
-See top of `e2e.js` for the exact definition. This keeps the whole thing "clear" (clearify).
+コミット前に必ず回す。
+- 強力な既存E2Eから始める
+- 新機能・変更を実装
+- その振る舞いをこのE2Eの中に「ついでに」テストとして追加
+- E2Eを育て、変更した単位の実質100%論理的カバーを達成するまで続ける
+
+この中で、制約駆動の1フレーム論理（入力＋状態変数 → 制約関数で書き換え＋導出）をテストするときは、純粋にその論理だけを見るスタイルで書く。
+関数型プログラミングなどでよくやる「derive/reducerのロジックだけをテストする」やり方とよく似ている。
+（プロジェクト内ではこのスタイルを e2e制約ロジカル と呼んでいる）
+詳細は `e2e.js` の冒頭コメントを参照。
 
 This should be much easier to remember and use for Virtual Heavy workflows.
 
@@ -187,10 +191,30 @@ e2e でもこのテンプレートを使ってテストしています。
 **より完全な実践例（yume との統合）**:
 - `yume-lite/examples/constraint-simple/` （見積もりドメインで、制約定義を Block の一次ソースにし、expand/apply で駆動変数だけを編集 → derive で状態を再構築するフルストーリー）
 - これは yume-lite に同梱の「一番わかりやすい」公式サンプルです。まずはこれを実行して体感してください。
+  （ここで実践されている「1フレームの入力＋状態変数 → 制約関数で書き換え＋導出」という過程は、e2e制約ロジカルに近い考え方の実例）
 - より大規模・本格的な例は別プロジェクト `yume-constraint-voxel` を参照（Snow-Ball テスト方法論も含む）。
 
 ### Execution Model（基本ループ）
-入力制約関数で入力を状態データに変換 → 状態管理制約関数で次の完全な状態を導出 → commit（新しいバージョンとして実行）。
+1フレームの論理過程を「制約」として扱う考え方。
+
+- 入力 + 現在の状態変数
+- を制約関数に与える
+- 制約関数が状態変数を書き換え **同時に** 現在の完全なステートを導出する
+
+```pseudo
+while true:
+    current = get_current_state()
+    input = receive_input()
+    state = input_constraint(current, input)
+    next_state = state_constraint(state)
+    commit(next_state)
+```
+
+これをひたすら繰り返すだけ。制約関数が状態をピシッと出す。
+
+この1フレームの論理をE2Eでテストするときは、純粋にその論理だけを見るスタイルで書く。
+関数型プログラミングなどでよく見られる「derive/reducerのロジックだけをテストする」やり方とよく似ている。
+snow-ballの中でこのような論理制約を「ついでに」育てていくのが、このプロジェクトの基本的なやり方。
 
 ```pseudo
 while true:
@@ -202,6 +226,9 @@ while true:
 ```
 
 これをひたすら繰り返すだけ。制約関数が状態をピシッと出す。
+
+実践例として公式に同梱しているのが
+`yume-lite/examples/constraint-simple/` である。
 
 ## Domain-Tagged Values (very core)
 This is one of the foundational conventions.

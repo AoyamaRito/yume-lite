@@ -377,6 +377,239 @@ export function heavyApply(graph, rootId, content, opts = {}) {
 }
 
 // ============================================================
+// First-sight key (for AI that read the README)
+// ============================================================
+// The thick editing tool works in two layers:
+//
+// 1. Read path (editing tool / client side):
+//    const view = expand(graph, rootId, opts);   // thick text with BLOCK boundaries + hashes
+//
+// 2. Write path (the one that must reach the real authority):
+//    const cmd = makeThickEdit({ root: rootId, content: editedView, opts });
+//    // send `cmd` over WS / postMessage / IPC / HTTP / whatever
+//    const result = applyThickEdit(authorityGraph, cmd);
+//
+// Critical distinction:
+// - Calling `apply(localGraphReplica, root, edited)` only mutates your local copy.
+// - Only `applyThickEdit` on the *authority* that owns the real Graph counts as the canonical write.
+// This is what makes browser UIs, agents, and automation actually safe and automatable.
+//
+// These two functions are intentionally tiny and must stay in core.js so the
+// complete "expand for read → makeThickEdit for write" model fits in one mental pass.
+
+// makeThickEdit: produces a plain, serializable command object.
+// Clients (UI, scripts, remote agents) use this instead of calling apply directly.
+export function makeThickEdit({ root, content, opts = {} }) {
+  if (!root) throw new Error('makeThickEdit requires root');
+  return {
+    kind: 'yume-lite/thick-edit',
+    version: 1,
+    root: String(root),
+    content: String(content ?? ''),
+    opts: { ...opts },
+    createdAt: Date.now(),
+  };
+}
+
+// applyThickEdit: the authority-side executor for a command produced by makeThickEdit.
+// This is the official write for the thick editing tool across process / network boundaries.
+export function applyThickEdit(graph, cmd) {
+  if (!cmd || typeof cmd !== 'object') {
+    const err = new Error('applyThickEdit received invalid command');
+    return Object.assign([], { ok: false, applied: false, error: err.message });
+  }
+  if (cmd.kind !== 'yume-lite/thick-edit' || cmd.version !== 1) {
+    const err = new Error(`applyThickEdit: unsupported command kind/version (got ${cmd.kind} v${cmd.version})`);
+    return Object.assign([], { ok: false, applied: false, error: err.message });
+  }
+  if (!cmd.root) {
+    const err = new Error('applyThickEdit: command missing root');
+    return Object.assign([], { ok: false, applied: false, error: err.message });
+  }
+
+  const updates = apply(graph, cmd.root, cmd.content, cmd.opts || {});
+  // attach a little context so callers can see it came through the command path
+  return Object.assign(updates, {
+    command: { kind: cmd.kind, root: cmd.root },
+  });
+}
+
+// ============================================================
+// Header discipline LINT (for Virtual Heavy thick views)
+// ============================================================
+// The main rule: only edit the *body* of each BLOCK.
+// Never modify:
+//   - // >>> BLOCK ... hash=...
+//   - // <<< /BLOCK ... hash=...
+//   - //     tags: ...  or //     refs: ...
+//   - the ROOT boundary lines
+//
+// This linter can be called *before* apply / applyThickEdit.
+// Especially useful for AI agents: edit the view → lint → fix if needed → apply.
+//
+// It does two kinds of checks:
+// 1. Structural integrity of the boundaries (matching ids, matching hashes on open/close).
+// 2. If you pass `original` (the exact string from expand), it also checks that
+//    all header / boundary lines are byte-for-byte unchanged.
+
+export function lintThickView(content, opts = {}) {
+  const { original = null, rootId = null } = opts;
+
+  const lines = String(content ?? '').split('\n');
+  const violations = [];
+
+  let cur = null;
+  let rootOpenSeen = false;
+  let rootOpenLine = 0;
+
+  function addViolation(kind, at, details) {
+    violations.push({
+      kind,
+      line: at,
+      message: details.message,
+      blockId: details.id || null,
+      severity: details.severity || 'error',
+    });
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const at = i + 1;
+    let m;
+
+    if ((m = line.match(OPEN_ROOT_RE))) {
+      rootOpenSeen = true;
+      rootOpenLine = at;
+      if (rootId && m[1] !== rootId) {
+        addViolation('root-id-mismatch', at, {
+          message: `ROOT id が違います。expected: ${rootId}, found: ${m[1]}`,
+          id: m[1],
+        });
+      }
+      continue;
+    }
+
+    if ((m = line.match(CLOSE_ROOT_RE))) {
+      if (rootId && m[1] !== rootId) {
+        addViolation('root-close-mismatch', at, {
+          message: `ROOT 終了 id が違います。expected: ${rootId}, found: ${m[1]}`,
+          id: m[1],
+        });
+      }
+      if (cur) {
+        addViolation('block-no-close', cur.openLine || at, {
+          message: `BLOCK ${cur.id} に閉じタグがありません。`,
+          id: cur.id,
+        });
+      }
+      cur = null;
+      continue;
+    }
+
+    if ((m = line.match(OPEN_BLOCK_RE))) {
+      if (cur) {
+        addViolation('block-no-close', cur.openLine || at, {
+          message: `BLOCK ${cur.id} の閉じタグが見つかる前に次のブロックが始まりました。`,
+          id: cur.id,
+        });
+      }
+      const attrs = parseAttrs(m[2]);
+      cur = {
+        id: m[1],
+        hashOpen: attrs.hash,
+        openLine: at,
+        openLineText: line,
+      };
+      continue;
+    }
+
+    if ((m = line.match(CLOSE_BLOCK_RE))) {
+      if (!cur) {
+        addViolation('stray-close', at, {
+          message: `対応する開始タグがない閉じタグがあります: ${line.trim()}`,
+          id: m[1],
+        });
+        continue;
+      }
+      const attrs = parseAttrs(m[2]);
+
+      if (m[1] !== cur.id) {
+        addViolation('block-id-mismatch', at, {
+          message: `BLOCK id が一致しません。open: ${cur.id}, close: ${m[1]} (行 ${cur.openLine}〜${at})`,
+          id: cur.id,
+        });
+      }
+
+      if (cur.hashOpen && attrs.hash && cur.hashOpen !== attrs.hash) {
+        addViolation('header-tamper', at, {
+          message: `BLOCK ${cur.id} のヘッダーが編集されています (hash mismatch)。\n` +
+                   `  開始: ${cur.openLineText}\n` +
+                   `  終了: ${line}\n` +
+                   `  → hash= の部分や >>> / <<< 行は絶対に変更しないでください。本文だけを編集してください。`,
+          id: cur.id,
+          severity: 'error',
+        });
+      }
+
+      // Check if the header line itself was modified in format (very common AI mistake)
+      // We can't know the exact original without `original`, but we can at least warn on obvious tampering.
+      cur = null;
+      continue;
+    }
+
+    // If we're inside a block, we don't care about body lines for header discipline.
+  }
+
+  if (cur) {
+    addViolation('block-no-close', lines.length, {
+      message: `最後の BLOCK ${cur.id} に閉じタグがありません。`,
+      id: cur.id,
+    });
+  }
+
+  // If we have the original expanded view, do a strict header-line comparison.
+  // This catches "I rewrote the header comment slightly" even if hashes happen to match.
+  if (original) {
+    const origLines = String(original).split('\n');
+    // Match any line that is a yume Virtual Heavy boundary or meta line.
+    // These are the lines the discipline says "do not touch".
+    const isHeaderLine = (l) => {
+      const t = l.trimStart();
+      return t.startsWith('// >>>') ||
+             t.startsWith('// <<<') ||
+             t.startsWith('//     tags:') ||
+             t.startsWith('//     refs:');
+    };
+
+    for (let i = 0; i < Math.min(lines.length, origLines.length); i++) {
+      const orig = origLines[i];
+      const edited = lines[i];
+      if (isHeaderLine(orig) && orig !== edited) {
+        addViolation('header-line-modified', i + 1, {
+          message: `ヘッダー行が変更されています (行 ${i + 1})。\n` +
+                   `  元: ${orig}\n` +
+                   `  現: ${edited}\n` +
+                   `  この行は expand が出力したそのままの状態を保ってください。本文 (BLOCK の中身) だけを編集してください。`,
+          severity: 'error',
+        });
+      }
+    }
+  }
+
+  const ok = violations.length === 0;
+  const advice = ok
+    ? 'ヘッダー規律は守られています。本文だけを編集したようです。'
+    : 'ヘッダー規律違反を検出しました。BLOCK の >>> / <<< 行と hash=、tags:、refs: 行は変更しないでください。';
+
+  return {
+    ok,
+    violations,
+    count: violations.length,
+    advice,
+  };
+}
+
+// ============================================================
 // Skeleton / List (for token saving)
 // ============================================================
 // Instead of full expand (which includes all content), get just the list of
