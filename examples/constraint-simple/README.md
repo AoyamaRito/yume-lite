@@ -7,7 +7,7 @@ yume-constraint-voxel（本格的な3Dボクセル実装 + Snow-Ball 100% covera
 - 誰でも 5〜10 分で「なぜこれが強いのか」を体感できる
 - コード総量が少なく、1つの run.js で全ストーリーが完結
 - 3Dループ・特殊ミラー・複雑パーサなどは一切なし
-- 見積もり（pricing / quote）という**普遍的に理解しやすいドメイン**を採用
+- 料金計算（pricing / fee）という**普遍的に理解しやすいドメイン**を採用
 
 ---
 
@@ -76,7 +76,7 @@ yume-lite/examples/constraint-simple/
 ```js
 // expand した結果に出てくるのはこれだけ
 base: usd:10000
-line: "基本デザイン" usd:4500
+line: "standard service" usd:4500
 discount: early-bird 0.15
 tax: 0.08
 shipping: usd:1200
@@ -96,7 +96,7 @@ const result = deriveQuote(loadedInput);
 
 ### 3. yume Block には「駆動定義」しか入らない
 
-`quote:policy` ブロックの `.content` は常に上記の短いテキスト形式。  
+`pricing:policy` ブロックの `.content` は常に上記の短いテキスト形式。  
 巨大な計算済みデータは保存しない。
 
 ### 4. domainTag の効果（core の最重要規約）
@@ -125,7 +125,7 @@ const result = deriveQuote(loadedInput);
 | 項目               | yume-constraint-voxel          | yume-constraint-simple          |
 |--------------------|--------------------------------|---------------------------------|
 | 目的               | 本格リファレンス + Snow-Ball 実践 | **エッセンスを最短で理解**     |
-| ドメイン           | 3D ボクセル（視覚的に強い）    | 見積もり（金額・割引・税）     |
+| ドメイン           | 3D ボクセル（視覚的に強い）    | 料金計算（金額・割引・税） |
 | コードの複雑さ     | ミラー・3重ループ・本格パーサ  | 1つの derive + 超単純パーサ    |
 | テスト戦略デモ     | 100% coverage Snow-Ball 完遂   | 最小限（理解優先）             |
 | 読むべき人         | 「本気でこのパターンを自分のPJに持ち込みたい人」 | 「まず全体像を掴みたい人」     |

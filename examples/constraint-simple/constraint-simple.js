@@ -6,10 +6,10 @@
  * 目的（yume-constraint-voxel から抽出した本質）:
  * - 状態は「直接編集しない」。**駆動変数（制約定義）だけを編集**する。
  * - 駆動変数は yume Block に載り、expand/apply の対象になる（小さい！）。
- * - 実際の完全な状態（ここでは「見積もり totals」）は、**純粋関数 deriveQuote で常に再導出**される。
+ * - 実際の完全な状態（ここでは「料金 totals」）は、**純粋関数 deriveQuote で常に再導出**される。
  * - これにより thick view が小さく保て、履歴が意味のある単位になり、LLM が全体を把握しやすい。
  *
- * このドメインは「見積もり (Quote / Pricing)」。
+ * このドメインは「料金計算 (Pricing / Fee)」。
  * - 金額は domainTag(DOMAINS.USD, ...) で自己記述的にする（LLM-First Typing）。
  * - ルール追加・変更が「テキスト1行」で済むのがポイント。
  *
@@ -27,7 +27,7 @@ import { domainTag, DOMAINS, Graph, Block, expand, apply, getSurface, skeleton, 
 // ============================================================
 
 /**
- * 見積もり駆動定義の内部表現（parse 後の形）。
+ * 料金駆動定義の内部表現（parse 後の形）。
  * これが「一次ソース」。voxels や final total はここから導出するだけ。
  */
 export function createQuoteInput({
@@ -46,7 +46,7 @@ export function createQuoteInput({
 //    極力シンプルに：# コメント、 key: value 系
 // ============================================================
 
-export function quoteToBlockContent(input, title = 'quote:policy') {
+export function quoteToBlockContent(input, title = 'pricing:policy') {
   const lines = [];
   lines.push(`# ${title} — 駆動定義だけを書く（これを thick edit する）`);
   lines.push('');
@@ -112,7 +112,7 @@ export function loadQuoteFromBlockContent(content) {
 
 // ============================================================
 // 3. 純粋導出関数（これが本質） -- YVCP rewrite (Packet 14)
-//    駆動定義だけを見て、常に一貫した「現在の見積もり全体」を返す。
+//    駆動定義だけを見て、常に一貫した「現在の料金全体」を返す。
 //    直接 total を触らない。制約（ルール）の出力として生まれる。
 //    関係性を所属する v-group variables (v00x stables) 上の純粋 constraint 関数として表現。
 //    完全に並列実行可能な state behavior 関数群 (deriveBaseGroup(v001), deriveDiscountsGroup(v00x), deriveTaxGroup など) に分割し、独立実行→combine。
@@ -170,7 +170,7 @@ function deriveShippingGroup(v007) {
 }
 
 /**
- * 駆動定義から完全な見積もり結果を導出。
+ * 駆動定義から完全な料金結果を導出。
  * すべての金額は domainTag で「usd:xxxx」として自己記述。
  * （内部実装は v-group constraint fns に分割済み。public signature / 出力内容は完全互換）
  */
@@ -273,8 +273,8 @@ export function makeSampleInput() {
   return createQuoteInput({
     base: 10000,
     lines: [
-      { label: '基本デザイン', amountUsd: 4500 },
-      { label: '追加ページ x2', amountUsd: 1800 },
+      { label: 'standard service', amountUsd: 4500 },
+      { label: 'extra options x2', amountUsd: 1800 },
     ],
     discounts: [
       { name: 'early-bird', percent: 0.12 },

@@ -35,7 +35,7 @@ console.log('║   yume-constraint-simple  —  制約駆動エッセンス最�
 console.log('╚════════════════════════════════════════════════════════════╝\n');
 
 console.log('【目的】');
-console.log('  状態（見積もり合計など）は「直接いじらない」。');
+console.log('  状態（料金合計など）は「直接いじらない」。');
 console.log('  駆動する「制約定義（ルール・金額・割引）」だけを yume Block に持ち、');
 console.log('  expand/apply で編集 → deriveQuote(純粋関数) で常に正しい状態を再構築。\n');
 
@@ -46,24 +46,24 @@ console.log('  expand/apply で編集 → deriveQuote(純粋関数) で常に正
 const graph = new Graph();
 
 // meta: プロジェクトの単一の真実のソース（getSurface が最初に見つけるもの）
-const meta = new Block({ id: 'meta:quote-demo', type: 'manifest' });
+const meta = new Block({ id: 'meta:pricing-demo', type: 'manifest' });
 meta.commit({
   content: [
     'Project: yume-constraint-simple (essence sample)',
     'Pattern: All derived totals come from constraint definitions via deriveQuote.',
-    'Editable surface: ONLY the policy block (quote:policy). Never store expanded totals in Blocks.',
-    'Key blocks: meta:quote-demo, quote:policy',
+    'Editable surface: ONLY the policy block (pricing:policy). Never store expanded totals in Blocks.',
+    'Key blocks: meta:pricing-demo, pricing:policy',
     'Domain tags: usd: values are self-describing (LLM-First Typing).',
     'Virtual-Map-IDs (stables for parallel YVCP): v001=base_amount, v002=line0, v003=line1, v004=discount_early-bird, v005=discount_friend, v006=tax, v007=shipping. tentative groups: pricing, adjustments, taxes, logistics.',
-    'Key roots: meta:quote-demo (manifest + vmap doc), quote:policy (primary constraints source).',
+    'Key roots: meta:pricing-demo (manifest + vmap doc), pricing:policy (primary constraints source).',
   ].join('\n'),
   tags: ['manifest', 'overview', 'constraint-driven', 'yume-lite'],
-  refs: [{ kind: 'policy', target: 'quote:policy' }],
+  refs: [{ kind: 'policy', target: 'pricing:policy' }],
 });
 graph.add(meta);
 
 // 制約の一次ソース Block（これが thick view の対象）
-const policyBlock = new Block({ id: 'quote:policy', type: 'policy' });
+const policyBlock = new Block({ id: 'pricing:policy', type: 'policy' });
 const initialInput = makeSampleInput();
 policyBlock.commit({
   content: quoteInputToBlockContent(initialInput),
@@ -76,12 +76,12 @@ const surface = getSurface(graph);
 console.log('getSurface():', surface.kind, '→', surface.id || '(inferred)');
 console.log('  advice:', surface.advice || '(manifest found)');
 
-console.log('\nskeleton(quote:policy, {depth:0}):');
-const skel = skeleton(graph, 'quote:policy', { depth: 0 });
+console.log('\nskeleton(pricing:policy, {depth:0}):');
+const skel = skeleton(graph, 'pricing:policy', { depth: 0 });
 console.dir(skel, { depth: 1 });
 
-console.log('\ngetImpact(quote:policy):');
-const impact = getImpact(graph, 'quote:policy');
+console.log('\ngetImpact(pricing:policy):');
+const impact = getImpact(graph, 'pricing:policy');
 console.log('  directDependents:', impact.directDependents.length, '(このポリシーを変えたら誰に影響か)');
 
 // ============================================================
@@ -90,7 +90,7 @@ console.log('  directDependents:', impact.directDependents.length, '(このポ�
 // ============================================================
 
 console.log('\n【Step 1: expand — 厚いビュー（これを人間/AI が編集する）】');
-const thick = expand(graph, 'quote:policy');
+const thick = expand(graph, 'pricing:policy');
 console.log(thick);
 
 // 初期導出（編集前）
@@ -113,7 +113,7 @@ let edited = thick
   // 割引を強化（元の 0.12 を 0.15 にし、friend 割引を追加）
   .replace('discount: early-bird 0.12', 'discount: early-bird 0.15\ndiscount: friend 0.05')
   // アイテム追加
-  .replace('line: "追加ページ x2" usd:1800', 'line: "追加ページ x2" usd:1800\nline: "特急オプション" usd:2500')
+  .replace('line: "extra options x2" usd:1800', 'line: "extra options x2" usd:1800\nline: "priority handling" usd:2500')
   // tax を少し下げる（政策変更）— 実際の文字列に合わせる
   .replace('tax: 0.1', 'tax: 0.08');
 
@@ -126,7 +126,7 @@ console.log(edited);
 // ============================================================
 
 console.log('\n【Step 3: apply → 再導出】');
-const updates = apply(graph, 'quote:policy', edited);
+const updates = apply(graph, 'pricing:policy', edited);
 console.log('apply result:', updates.ok ? 'ok' : 'fail', 'warnings:', updates.warnings?.length || 0);
 
 currentInput = loadQuoteInputFromBlockContent(policyBlock.content);
@@ -147,7 +147,7 @@ console.log('  summary:', result.summary);
 console.log('\n【Step 4: 公式書き込みコマンド形（makeThickEdit / applyThickEdit）】');
 
 const cmd = makeThickEdit({
-  root: 'quote:policy',
+  root: 'pricing:policy',
   content: edited,           // すでに編集済みのテキストを使う（デモ用）
   opts: {},
 });
@@ -160,7 +160,7 @@ console.log('  (content は省略表示)');
 const authorityResult = applyThickEdit(graph, cmd);
 console.log('applyThickEdit on authority:', authorityResult.ok ? 'success' : 'rejected');
 
-const afterCmdInput = loadQuoteInputFromBlockContent(graph.get('quote:policy').content);
+const afterCmdInput = loadQuoteInputFromBlockContent(graph.get('pricing:policy').content);
 const afterCmdResult = deriveQuote(afterCmdInput);
 console.log('コマンド適用後の TOTAL:', afterCmdResult.total);
 
@@ -216,8 +216,8 @@ const yvcpMappingDemoInput = {
   // 'base' の human 名を manifest/mapping 層で 'initialAmount' に変更した例（round_score 相当の別名付けも同様）
   initialAmount: 10000,
   lines: [
-    { label: '基本デザイン', amountUsd: 4500 },
-    { label: '追加ページ x2', amountUsd: 1800 },
+    { label: 'standard service', amountUsd: 4500 },
+    { label: 'extra options x2', amountUsd: 1800 },
   ],
   discounts: [
     { name: 'early-bird', percent: 0.12 },
@@ -249,8 +249,8 @@ console.log('  applied:', yvcpDemoResult.appliedAdjustments.map(a => `${a.type}:
 const directSameData = deriveQuote({
   base: 10000,
   lines: [
-    { label: '基本デザイン', amountUsd: 4500 },
-    { label: '追加ページ x2', amountUsd: 1800 },
+    { label: 'standard service', amountUsd: 4500 },
+    { label: 'extra options x2', amountUsd: 1800 },
   ],
   discounts: [
     { name: 'early-bird', percent: 0.12 },
