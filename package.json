@@ -9,6 +9,6 @@
     "e2e": "node e2e.js"
   },
   "keywords": ["yume", "virtual-heavy", "block", "graph", "ai-editing"],
-  "author": "AoyamaRito",
+  "author": "yume contributors",
   "license": "MIT"
 }
