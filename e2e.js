@@ -965,6 +965,276 @@ group('Constraint Folding (A2)', () => {
 });
 
 // ============================================================
+// YVCP Virtual-Map Stables + Domain State (snow-ball addition)
+// ============================================================
+// snow-ball（テスト成長プロセス） addition for Packet 17 of yume-lite YVCP rewrite.
+// 新規 group は既存 'Constraint Folding (A2)' の直後、'Header Discipline LINT' より前に追加。
+// 1-2 個の純粋 e2e制約ロジカル テスト（inline func のみ、sample import なし）。
+// v001 stable を state var の key として使い、domain-tagged value を derived state に直接使用（no double struct）。
+// Execution Model + snow-ball をコメントで参照。論理的正しさを e2e制約ロジカル purity で assert。
+group('YVCP Virtual-Map Stables + Domain State (snow-ball addition)', () => {
+  // --- e2e制約ロジカル (YVCP snow-ball addition) ---
+  test('e2e制約ロジカル: v001 stable as key for state var + domain-tagged value used directly in derived state (no double struct)', () => {
+    // 現在の状態変数（v001 が stable キーとして virtual-map の state var を指す）
+    const currentStateVars = {
+      v001: 100,
+    };
+
+    // このフレームの入力
+    const frameInput = {
+      delta: 25,
+    };
+
+    // 制約関数（inline func のみ）：入力 + 状態変数を受け取り、状態変数を更新しつつ現在のステートを導出
+    // v001 stable key を用い、derived では domain-tagged value を直接配置（double struct を避ける）
+    const deriveFrameState = (input, stateVars) => {
+      // 状態変数の書き換え（stable key の下で）
+      const newStateVars = {
+        ...stateVars,
+        v001: stateVars.v001 + input.delta,
+      };
+
+      // 同時に現在の完全なステートを導出。domain-tagged value を derived state に *直接* 使用。
+      // no double struct: e.g. derived に stateVars 全体のコピー構造を二重に持たせない。
+      const derivedCurrentState = {
+        v001: domainTag(DOMAINS.COUNT, newStateVars.v001),  // 直接 tagged value を格納
+        effective: newStateVars.v001 * 2,
+      };
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    const { newStateVars, derivedCurrentState } = deriveFrameState(frameInput, currentStateVars);
+
+    // e2e制約ロジカルとして、ここでは「論理的正しさ」だけをassert
+    // （thick viewの編集詳細や、snow-ballカバレッジには依存しない）
+    // Execution Model（基本ループ）の 1-frame ロジックを純粋に縛るテスト（YVCP snow-ball addition）
+    assert.equal(newStateVars.v001, 125);
+    assert.ok(derivedCurrentState.v001.startsWith('count:'));
+    assert.equal(derivedCurrentState.effective, 250);
+    const parsed = parseDomainTag(derivedCurrentState.v001);
+    assert.equal(parsed.domain, 'count');
+    assert.equal(parsed.value, '125');
+  });
+
+  test('e2e制約ロジカル: domain-tagged value under v001 stable key used directly (no double struct, Execution Model)', () => {
+    // バリエーション: state var の値自体を domain-tagged で持ち、derive で直接利用
+    const currentStateVars = {
+      v001: domainTag(DOMAINS.WORLD, '0,0'),
+    };
+
+    const frameInput = {
+      dx: 3,
+      dy: 4,
+    };
+
+    const deriveFrameState = (input, stateVars) => {
+      const cur = parseDomainTag(stateVars.v001).value;
+      const [x, y] = cur.split(',').map(n => Number(n) || 0);
+      const nx = x + input.dx;
+      const ny = y + input.dy;
+
+      const newStateVars = {
+        ...stateVars,
+        v001: domainTag(DOMAINS.WORLD, `${nx},${ny}`),
+      };
+
+      // derivedCurrentState では tagged value を直接（struct の二重化を避け、Execution Model の導出をクリーンに）
+      const derivedCurrentState = {
+        pos: domainTag(DOMAINS.WORLD, `${nx},${ny}`),  // direct
+      };
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    const { newStateVars, derivedCurrentState } = deriveFrameState(frameInput, currentStateVars);
+
+    // snow-ball addition: 論理的正しさの assert のみ
+    assert.ok(newStateVars.v001.startsWith('world:'));
+    assert.ok(derivedCurrentState.pos.startsWith('world:'));
+    const p = parseDomainTag(derivedCurrentState.pos);
+    assert.equal(p.domain, 'world');
+    assert.equal(p.value, '3,4');
+  });
+});
+
+// ============================================================
+// YVCP State Groups + Parallel Behaviors (snow-ball addition)
+// ============================================================
+// snow-ball（テスト成長プロセス） addition for Packet 18 of yume-lite YVCP rewrite.
+// Append only after Packet 17's group (no edits to prior content; do not touch X same as 17).
+// 1 pure e2e制約ロジカル test showing multi-membership (one var belonging to 2 groups) + two independent/parallelizable derive behavior funcs (compose results) using v stables.
+// Execution Model + snow-ball をコメントで参照。論理的正しさを e2e制約ロジカル purity で assert。
+group('YVCP State Groups + Parallel Behaviors (snow-ball addition)', () => {
+  // --- e2e制約ロジカル (YVCP snow-ball addition) ---
+  test('e2e制約ロジカル: multi-membership (one var belonging to 2 groups) + two independent/parallelizable derive behavior funcs (compose results) using v stables', () => {
+    // 現在の状態変数（v stables で virtual-map state を key 化; v010 が multi-membership: render-group と data-group の両方に所属）
+    const currentStateVars = {
+      v010: 42,
+      v011: 'idle',
+    };
+
+    // このフレームの入力
+    const frameInput = {
+      delta: 5,
+      mode: 'active',
+    };
+
+    // 制約関数（inline のみ）：2つの independent/parallelizable derive behavior funcs を定義し、結果を compose
+    // v010 stable を 2 groups で共有使用。Execution Model の state_constraint 相当で並列 derive を合成。
+    const deriveFrameBehaviors = (input, stateVars) => {
+      // 状態変数の書き換え（v stables 使用）
+      const newStateVars = {
+        ...stateVars,
+        v010: stateVars.v010 + input.delta,
+        v011: input.mode,
+      };
+
+      // derive behavior 1 (render group, independent)
+      const deriveRenderBehavior = (nsv, inp) => ({
+        display: nsv.v010,
+        group: 'render-group',
+      });
+
+      // derive behavior 2 (data group, independent, parallelizable)
+      const deriveDataBehavior = (nsv, inp) => ({
+        stored: nsv.v010 * 3,
+        group: 'data-group',
+      });
+
+      const partRender = deriveRenderBehavior(newStateVars, input);
+      const partData = deriveDataBehavior(newStateVars, input);
+
+      // compose results (2 funcs の出力を ... で合成 → 最終 derived state)
+      const derivedCurrentState = {
+        v010: domainTag(DOMAINS.COUNT, newStateVars.v010),  // direct domain-tagged in derived (no double struct)
+        ...partRender,
+        ...partData,
+        composedFromParallel: true,
+      };
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    const { newStateVars, derivedCurrentState } = deriveFrameBehaviors(frameInput, currentStateVars);
+
+    // e2e制約ロジカルとして、ここでは「論理的正しさ」だけをassert
+    // （thick viewの編集詳細や、snow-ballカバレッジには依存しない）
+    // Execution Model（基本ループ）の 1-frame ロジックを純粋に縛るテスト（YVCP snow-ball addition for groups+parallel）
+    assert.equal(newStateVars.v010, 47);
+    assert.equal(newStateVars.v011, 'active');
+    assert.equal(derivedCurrentState.display, 47);
+    assert.equal(derivedCurrentState.stored, 141);
+    assert.ok(derivedCurrentState.v010.startsWith('count:'));
+    assert.equal(derivedCurrentState.composedFromParallel, true);
+    const parsed = parseDomainTag(derivedCurrentState.v010);
+    assert.equal(parsed.domain, 'count');
+    assert.equal(parsed.value, '47');
+    // multi-membership evidence: v010 (one var) is referenced/used by both deriveRenderBehavior and deriveDataBehavior (2 groups)
+  });
+});
+
+// ============================================================
+// YVCP Pure Constraints on v-groups + Execution Loop + Later Mapping (snow-ball addition)
+// ============================================================
+// snow-ball（テスト成長プロセス） addition for Packet 19 of yume-lite YVCP rewrite (after Packet 18).
+// 新規 group は既存 YVCP group (Packet17) の直後、prior new groups の後に、'Minimal scaling kit' より前に append only で追加。
+// 1-2 個の純粋 e2e制約ロジカル テスト（inline func のみ、sample import なし）。
+// input_constraint / state_constraint(derive using only v00x) loop を体現。
+// "mapping layer" での後からの name change をシミュレート（制約コード自体 untouched のまま）し、正しい derived state を production する。
+// Execution Model + snow-ball をコメントで参照。論理的正しさを e2e制約ロジカル purity で assert。
+group('YVCP Pure Constraints on v-groups + Execution Loop + Later Mapping (snow-ball addition)', () => {
+  // --- e2e制約ロジカル (YVCP snow-ball addition for Packet 19) ---
+  test('e2e制約ロジカル: input_constraint / state_constraint(derive using only v00x) loop on v-groups + Execution Loop', () => {
+    // 現在の状態変数（v00x が v-groups の stable キー）
+    const currentStateVars = {
+      v001: 10,
+      v002: 20,
+    };
+
+    // このフレームの入力
+    const frameInput = {
+      add: 5,
+    };
+
+    // 制約関数（inline func のみ）：Execution Loop の 1-frame ロジック。
+    // input_constraint で入力を state var (v00x) に適用、state_constraint で v00x のみを使って derivedCurrentState を導出。
+    const deriveFrameState = (input, stateVars) => {
+      // input_constraint: 入力に基づく state 更新提案（v-groups のみ）
+      const inputConstraint = (inp, sv) => ({
+        v001: sv.v001 + (inp.add || 0),
+        v002: sv.v002,
+      });
+      const afterInput = inputConstraint(input, stateVars);
+
+      // state_constraint(derive using only v00x): v001/v002 のみから derived を純粋導出（他の key を使わず）
+      const stateConstraint = (sv) => ({
+        sum: domainTag(DOMAINS.COUNT, sv.v001 + sv.v002),
+        diff: domainTag(DOMAINS.COUNT, sv.v001 - sv.v002),
+      });
+      const newStateVars = { ...stateVars, ...afterInput };
+      const derivedCurrentState = stateConstraint(newStateVars);
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    const { newStateVars, derivedCurrentState } = deriveFrameState(frameInput, currentStateVars);
+
+    // e2e制約ロジカルとして、ここでは「論理的正しさ」だけをassert
+    // （thick viewの編集詳細や、snow-ballカバレッジには依存しない）
+    // Execution Model（基本ループ）の 1-frame ロジックを純粋に縛るテスト（YVCP snow-ball addition Packet19）
+    assert.equal(newStateVars.v001, 15);
+    assert.equal(newStateVars.v002, 20);
+    assert.ok(derivedCurrentState.sum.startsWith('count:'));
+    assert.equal(parseDomainTag(derivedCurrentState.sum).value, '35');
+    assert.equal(parseDomainTag(derivedCurrentState.diff).value, '-5');
+  });
+
+  test('e2e制約ロジカル: simulated later name change in "mapping layer" (constraints untouched) producing correct derived state', () => {
+    // v-groups (v00x) 上で純粋に書かれた制約は "later" に変わらない。
+    // mapping layer が name change (v001 -> real name) を担当するが、制約ロジック自体は untouched のまま。
+    const deriveUsingOnlyVGroups = (input, stateVars) => {
+      // この関数全体が "constraints" 相当：v00x のみを使い、決して実名をハードコードしない（後からの mapping 変更に強い）。
+      const newStateVars = {
+        ...stateVars,
+        v001: (stateVars.v001 || 0) + (input.dx || 0),
+      };
+
+      // state_constraint 相当: derive using only v00x
+      const derivedCurrentState = {
+        pos: domainTag(DOMAINS.WORLD, `${newStateVars.v001},0`),
+      };
+
+      return { newStateVars, derivedCurrentState };
+    };
+
+    // 初期実行（mapping 前）
+    const res1 = deriveUsingOnlyVGroups({ dx: 2 }, { v001: 100 });
+    assert.equal(res1.newStateVars.v001, 102);
+    let p1 = parseDomainTag(res1.derivedCurrentState.pos);
+    assert.equal(p1.domain, 'world');
+    assert.equal(p1.value, '102,0');
+
+    // LATER: mapping layer で name change シミュレート（例: v001 を 'hero:posx' に mapping 追加）
+    // 重要: deriveUsingOnlyVGroups (constraints) のコードは一切触っていない。v00x ロジックはそのまま。
+    const laterMapping = { v001: 'hero:posx' };
+
+    // 同じ untouched constraint logic を再利用（Execution Loop の継続）
+    const res2 = deriveUsingOnlyVGroups({ dx: -1 }, { v001: 102 });
+    assert.equal(res2.newStateVars.v001, 101);
+    let p2 = parseDomainTag(res2.derivedCurrentState.pos);
+    assert.equal(p2.value, '101,0');
+
+    // mapping layer が後で state を named に変換しても、derived の論理的正しさは constraint (v00x) から正しく得られる
+    const mappedForLater = { [laterMapping.v001]: res2.derivedCurrentState.pos };
+    assert.ok(mappedForLater['hero:posx'].startsWith('world:'));
+    assert.equal(parseDomainTag(mappedForLater['hero:posx']).value, '101,0');
+
+    // snow-ball addition: 制約 untouched のまま name change 後も正しい derived を production
+  });
+});
+
+// ============================================================
 // 7. Minimal scaling kit (getSurface + getImpact)
 // ============================================================
 group('Minimal scaling kit (10k+ LOC aids)', () => {

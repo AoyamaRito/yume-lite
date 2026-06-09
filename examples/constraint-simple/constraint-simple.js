@@ -111,69 +111,141 @@ export function loadQuoteFromBlockContent(content) {
 }
 
 // ============================================================
-// 3. 純粋導出関数（これが本質）
+// 3. 純粋導出関数（これが本質） -- YVCP rewrite (Packet 14)
 //    駆動定義だけを見て、常に一貫した「現在の見積もり全体」を返す。
 //    直接 total を触らない。制約（ルール）の出力として生まれる。
+//    関係性を所属する v-group variables (v00x stables) 上の純粋 constraint 関数として表現。
+//    完全に並列実行可能な state behavior 関数群 (deriveBaseGroup(v001), deriveDiscountsGroup(v00x), deriveTaxGroup など) に分割し、独立実行→combine。
+//    返却 state では domain-tagged values を直接使用（applied/results 内に {name, value} 二重構造を作らない）。
 // ============================================================
+
+/**
+ * 各 v-group に対する純粋な state behavior 関数群。
+ * これらは所属 v00x stables のみ（+必要最小 cross input）で動作し、独立・並列可能。
+ * すべて返り値で domain-tagged value を直接用いる。
+ */
+function deriveBaseGroup(v001) {
+  const val = v001 || 0;
+  return {
+    detail: { label: 'base', amount: domainTag(DOMAINS.USD, val) },
+    contrib: val,
+  };
+}
+
+function deriveLinesGroup(lineItems) {
+  // v002, v003, ... に対応する lines group
+  return (lineItems || []).map(item => ({
+    detail: { label: item.label, amount: domainTag(DOMAINS.USD, item.amountUsd) },
+    contrib: item.amountUsd,
+  }));
+}
+
+function deriveDiscountsGroup(discountItems, preDiscountRaw) {
+  // v00x (v004=early-bird など discounts group) に対する constraint
+  return (discountItems || []).map(item => {
+    const deltaRaw = Math.round(preDiscountRaw * item.percent);
+    return {
+      name: item.name,
+      percent: item.percent,
+      delta: domainTag(DOMAINS.USD, -deltaRaw), // direct tagged value, no {name,value} double struct
+      deltaRaw,
+    };
+  });
+}
+
+function deriveTaxGroup(v006, taxableRaw) {
+  const taxRaw = Math.round(taxableRaw * (v006 || 0));
+  return {
+    taxRaw,
+    delta: domainTag(DOMAINS.USD, taxRaw), // direct
+  };
+}
+
+function deriveShippingGroup(v007) {
+  const shipRaw = v007 || 0;
+  return {
+    shipRaw,
+    delta: domainTag(DOMAINS.USD, shipRaw), // direct
+  };
+}
 
 /**
  * 駆動定義から完全な見積もり結果を導出。
  * すべての金額は domainTag で「usd:xxxx」として自己記述。
+ * （内部実装は v-group constraint fns に分割済み。public signature / 出力内容は完全互換）
  */
 export function deriveQuote(input) {
-  let running = input.base || 0;
+  // YVCP: belonging v-group variables (v00x stables) への割り当て
+  // (Virtual-Map-IDs per prior packets: v001=base_amount, v002=line0, v003=line1, v004=discount_early-bird, ...)
+  // tentative groups: pricing (v001+lines), adjustments (discount v00x), taxes (v006), logistics (v007)
+  const v001 = input.base || 0; // base_amount
 
+  const lineItems = (input.lines || []).map((ln, i) => ({
+    v: `v00${2 + i}`,
+    label: ln.label,
+    amountUsd: ln.amountUsd,
+  }));
+
+  const discountItems = (input.discounts || []).map((d, i) => ({
+    v: `v00${4 + i}`,
+    name: d.name,
+    percent: d.percent,
+  }));
+
+  const v006 = input.taxRate || 0; // tax
+  const v007 = input.shipping || 0; // shipping
+
+  // 並列可能な state behavior fns をそれぞれ独立に実行（combine で集約）
+  const baseState = deriveBaseGroup(v001);
+  const linesStates = deriveLinesGroup(lineItems);
+  const preDiscountRaw = baseState.contrib + linesStates.reduce((sum, s) => sum + s.contrib, 0);
+  const preDiscount = domainTag(DOMAINS.USD, preDiscountRaw);
+
+  const discountsStates = deriveDiscountsGroup(discountItems, preDiscountRaw);
+
+  let running = preDiscountRaw;
   const applied = [];
-  const detailLines = [];
+  const detailLines = [
+    baseState.detail,
+    ...linesStates.map(s => s.detail),
+  ];
 
-  // ベース + 明細
-  detailLines.push({ label: 'base', amount: domainTag(DOMAINS.USD, input.base) });
-  for (const ln of input.lines || []) {
-    running += ln.amountUsd;
-    detailLines.push({ label: ln.label, amount: domainTag(DOMAINS.USD, ln.amountUsd) });
-  }
-
-  const preDiscount = running;
-
-  // 割引を順に適用（このサンプルでは単純に乗算累積）
-  let discountTotal = 0;
-  for (const d of input.discounts || []) {
-    const delta = Math.round(preDiscount * d.percent);
-    discountTotal += delta;
-    running -= delta;
+  for (const ds of discountsStates) {
+    running -= ds.deltaRaw;
     applied.push({
       type: 'discount',
-      name: d.name,
-      percent: d.percent,
-      delta: domainTag(DOMAINS.USD, -delta),
+      name: ds.name,
+      percent: ds.percent,
+      delta: ds.delta, // direct domain-tagged
     });
   }
 
-  const taxable = running;
-  const tax = Math.round(taxable * (input.taxRate || 0));
-  running += tax;
-  if (tax > 0) {
-    applied.push({ type: 'tax', rate: input.taxRate, delta: domainTag(DOMAINS.USD, tax) });
+  const taxableRaw = running;
+  const taxState = deriveTaxGroup(v006, taxableRaw);
+  running += taxState.taxRaw;
+  if (taxState.taxRaw > 0) {
+    applied.push({ type: 'tax', rate: v006, delta: taxState.delta });
   }
 
-  const ship = input.shipping || 0;
-  running += ship;
-  if (ship > 0) {
-    applied.push({ type: 'shipping', delta: domainTag(DOMAINS.USD, ship) });
+  const shipState = deriveShippingGroup(v007);
+  running += shipState.shipRaw;
+  if (shipState.shipRaw > 0) {
+    applied.push({ type: 'shipping', delta: shipState.delta });
   }
 
-  const total = running;
+  const totalRaw = running;
+  const total = domainTag(DOMAINS.USD, totalRaw);
 
   return {
     input,
     detailLines,
     appliedAdjustments: applied,
-    preDiscount: domainTag(DOMAINS.USD, preDiscount),
-    tax: domainTag(DOMAINS.USD, tax),
-    shipping: domainTag(DOMAINS.USD, ship),
-    total: domainTag(DOMAINS.USD, total),
+    preDiscount,
+    tax: taxState.delta || domainTag(DOMAINS.USD, 0),
+    shipping: shipState.delta || domainTag(DOMAINS.USD, 0),
+    total,
     // 人間が見やすいサマリ（デモ用）
-    summary: `total=${domainTag(DOMAINS.USD, total)} (pre-discount ${domainTag(DOMAINS.USD, preDiscount)}, discounts ${applied.filter(a=>a.type==='discount').length})`,
+    summary: `total=${total} (pre-discount ${preDiscount}, discounts ${applied.filter(a=>a.type==='discount').length})`,
   };
 }
 

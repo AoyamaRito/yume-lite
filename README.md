@@ -120,6 +120,14 @@ E2E: `npm test` or `node e2e.js` (core tests + constraint template tests)
 （プロジェクト内ではこのスタイルを e2e制約ロジカル と呼んでいる）
 詳細は `e2e.js` の冒頭コメントを参照。
 
+**YVCP parallel discipline (for agents editing this crystal or consumers, additive to run instructions):**
+- Always use isolated git worktree (per AGENTS.md worktree & agent isolation policy).
+- Start cheap: skeleton via `grep '^#|^##|^### ' README.md` + targeted `read_file offset/limit` + list_dir before any expand/edit/apply.
+- Coordinate exclusively through stable Block IDs + v00x Virtual-Map-IDs (declared in manifest, discovered via getSurface/skeleton/getImpact first); never rely on shifting human names.
+- Use additive search_replace only (prefer 0 deletions for append-style doc changes); always verify prior text identical via read + sha before edit.
+- Capture evidence after change: `git diff` (must be clean + for your packet), `wc -l`, targeted `read_file` + `cat -n tail`, shas of prior content; append full report (packet ID, status vs DoD, all key commands+outputs, files touched, blockers, absolute worktree path) to AGENT_REPORT.md or memo.md in the worktree.
+- Submit report then rest. The YVCP section (immediately after Domain-Tagged Values) documents the complete pattern.
+
 This should be much easier to remember and use for Virtual Heavy workflows.
 
 Current e2e covers:
@@ -301,3 +309,121 @@ Benefits (from the axioms):
 Use these in your block contents. The Virtual Heavy view will carry them as-is.
 
 See example.js for demo + parseDomainTag.
+
+
+## Parallel Development with Yume-Lite (YVCP)
+
+
+YVCP (Yume-Lite Virtual Crystal Parallelism) is the disciplined pattern for safe parallel development against the stable yume-lite crystal. It centers on multiple agents/worktrees coordinating changes exclusively through stable Block IDs + refs as connectors + manifest entrypoints, always beginning with getSurface/skeleton/getImpact first before any targeted expand or edit. The 8 key elements at high level are: stable Block IDs with append-only capped history, graph connectivity via refs/children/tags, manifest conventions, getSurface/skeleton/getImpact for cheap high-leverage structure views, expand/apply for Virtual Heavy hash-protected thick views, readPartial for efficient partial access, Domain-Tagged Values (e.g. world:, usd:, time:) as LLM-first self-describing data, and Constraint Folding kept as an external living template outside core. This approach removes opacity while enabling true parallel streams without ever mutating the shared crystal directly.
+
+
+### Virtual-Map-IDs as stable connectors (v001, v002, ...)
+
+Human names (e.g. `round_score`, `currentPrice`) shift often during parallel development by multiple agents. Virtual-Map-IDs (v001, v002, ...) serve as the stable connectors. The vmap declaration lives in a manifest or meta: block (found first via getSurface/skeleton/getImpact); all code and constraints reference only the v00x + domain tagged values.
+
+Example:
+
+```js
+// YVCP: stable vmap from manifest (v001 etc never change even if human labels do)
+const v001 = input.base || 0; // Virtual-Map-ID, stable ID for coordination
+const v002 = input.multi || 1;
+...
+```
+
+Ties to existing stable Block IDs + refs + manifest for key roots (vmap declaration lives under meta: or doc:).
+
+
+### State groups with multi-membership
+
+Groups (sets of state variables / axes) explicitly support multi-membership: the same datum or entity can belong to >1 group simultaneously (e.g. a value participating in both 'score' and 'economy' axes) via the constraint definitions. No duplication of structures required.
+
+Short example tying to axes/belonging:
+
+```js
+// YVCP: v001 belongs to multiple groups via the constraint's axes
+// axes: ['combat', 'economy'] allows the var in both without double state
+```
+
+Driving Blocks only declare the minimal; membership is expressed in the (parallelizable) constraint functions.
+
+
+### State behaviors are completely parallelizable
+
+The "behaviors" (i.e. computed state, effective values, full derived outputs such as quote totals, story events, boosted factors, etc.) are never directly authored or stored as implementation code inside Blocks.
+
+Instead:
+- Driving constraints (the axes / policy inputs, e.g. the short `base: ... discount: ...` text) are the *only* things placed in yume Blocks and edited via `expand` / `apply` (after the usual getSurface/skeleton/getImpact scoping).
+- A single flat `derive*(inputs)` pure function (see constraint-template.js + examples/constraint-simple/) always recomputes the entire current state + behaviors on demand from the current driving set.
+
+In YVCP terms, this means state behaviors / implementations are *completely parallelizable*:
+
+Multiple workers (in their worktrees) can independently expand/apply edits to *their* driving constraint blocks (using stable Block IDs or v00N Virtual-Map-IDs for coordination), without any risk of conflicting on the derived behaviors themselves. Re-derive is deterministic and side-effect free; it acts as the "fold" that materializes consistent state for each stream. No shared mutable "impl" state to synchronize.
+
+This is why YVCP works at scale: the parallelizable surface is tiny (only driving constraints), the heavy derived behaviors stay virtual / on-demand.
+
+See the constraint-simple example for concrete expand/apply-on-driving + derive roundtrip.
+
+
+### Relationships expressed purely as constraint functions on belonging variable groups (v00x stables)
+
+No double {name, value} structures anywhere in applied state or results: values are domain-tagged primitives directly (e.g. `usd:1234` produced by domainTag). All relationships are expressed purely as constraint functions on the belonging variable groups (the v00x stables). Discover the vmap via manifest + getSurface/skeleton first (stable IDs, independent of human names like round_score that shift in parallel work); then drive only the policy Block.
+
+Example using vmaps (v001=base_amount etc; see constraint-simple post v-group rewrite):
+
+```js
+// YVCP: belonging v-group variables (v00x stables) への割り当て
+const v001 = input.base || 0; // from Virtual-Map-IDs
+...
+const total = domainTag(DOMAINS.USD, totalRaw); // direct tagged value, never wrapped {name, value}
+```
+
+Ties to existing stable Block IDs + refs + manifest for key roots (vmap declaration lives in meta:).
+
+
+### Domain-tagged values used directly in state
+
+Domain-Tagged Values are used directly inside the state groups and throughout the v00x variables and derived results. The output of constraints and the values committed are the tagged forms themselves (e.g. `world:5,0,2`, `time:171...`); no intermediate plain objects or name wrappers. This convention (core, see prior section) flows through the entire Execution Model loop and YVCP parallel streams, keeping every value self-describing.
+
+
+### Execution Model loop with YVCP
+
+YVCP workers operate inside the single Execution Model loop (see ### Execution Model（基本ループ） and the natural language pipeline section). Each parallel stream receives current (domain-tagged v-group state), applies its input_constraint slice, lets the shared state_constraint derive, and commits. Coordination happens only via stable v00x / Block IDs discovered cheaply first. The loop itself is never forked; parallelism is in the independent driving edits + deterministic re-derive.
+
+```pseudo
+// YVCP workers in separate worktrees contribute to the same loop
+while true:
+    current = get_current_state()   # v00x + domain tags via manifest
+    input = receive_input()
+    state = input_constraint(current, input)
+    next_state = state_constraint(state)
+    commit(next_state)
+```
+
+
+### Later mapping without rewriting
+
+Because relationships are purely constraint functions over the stable v00x belonging groups, and values use domain tags directly, the mapping from v00x to human-meaningful names (or additional axes) can be changed/extended later entirely in the manifest block. No need to rewrite constraint code, existing Blocks, prior history, or other workers' driving logic. Stable IDs + pure functions + getSurface first make later evolution safe and local to one place.
+
+
+### Tie-ins to yume-lite primitives + cross-refs
+
+All of the above (Virtual-Map-IDs, groups/multi-membership, parallelizable behaviors, pure constraint relationships on v-groups, direct domain-tagged state, Execution Model integration, later mapping) are direct consequences of the yume-lite primitives and conventions already in this document:
+
+- Stable Block IDs + append-only capped history (core)
+- Graph via refs/children/tags
+- Manifest + getSurface/skeleton/getImpact (always start here for cheap view + scoping)
+- expand / apply (and makeThickEdit) for Virtual Heavy editing
+- readPartial for token efficiency
+- Domain-Tagged Values (section immediately before this YVCP section)
+- Constraint Folding kept outside core as living template
+
+See also: AI Self-Check, Usage (real remote case), Current Status sections, examples/constraint-simple/, core.js comments on First-sight key, and e2e.js for the e2e制約ロジカル style. This keeps the working mental model minimal while supporting massive parallel development against the crystal.
+
+
+
+
+
+
+
+
+
