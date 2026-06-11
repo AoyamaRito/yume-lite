@@ -1,0 +1,6 @@
+[submodule "yume-files"]
+	path = yume-files
+	url = https://github.com/AoyamaRito/yume-files.git
+[submodule "yume-develop"]
+	path = yume-develop
+	url = https://github.com/AoyamaRito/yume-develop.git
