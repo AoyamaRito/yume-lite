@@ -44,9 +44,22 @@ export function sameRefs(a, b) {
   return true;
 }
 
+// 全ネスト階層でキーをソートして正規化する。
+// （JSON.stringify の配列レプレーサーは全階層にキーフィルタとして効くため、
+//   refs: [{kind, target}] の中身が [{}] に潰れてハッシュから脱落するバグがあった）
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value).sort()) out[k] = canonicalize(value[k]);
+    return out;
+  }
+  return value;
+}
+
 export function hashVersion(v) {
   const { hash, ...rest } = v;
-  const stable = JSON.stringify(rest, Object.keys(rest).sort());
+  const stable = JSON.stringify(canonicalize(rest));
   let h = 0x811c9dc5;
   for (let i = 0; i < stable.length; i++) {
     h ^= stable.charCodeAt(i);
@@ -237,9 +250,11 @@ export function expand(graph, rootId, opts = {}) {
 //          | 'rejected-integrity' (whole transaction rejected)
 //
 // Strict by default: any fatal warning (id mismatch / hash tamper / dup id /
-// missing close / root mismatch) rejects the entire apply atomically.
+// missing close / root mismatch / stale write) rejects the entire apply atomically.
+// stale-write = expand 後に他者がそのブロックを変更した（ヘッダ hash と現在の blockHash の不一致）。
 // Pass opts.lenient = true to apply parseable blocks even when fatals exist
-// (still reports them via .warnings).
+// (still reports them via .warnings). stale なブロック自体は lenient でも skip され、
+// 並行変更が黙って上書きされることはない。re-expand してやり直すこと。
 export function apply(graph, rootId, content, opts = {}) {
   const { lenient = false } = opts;
   const scope = virtualHeavy(graph, rootId, opts);
@@ -335,10 +350,23 @@ export function apply(graph, rootId, content, opts = {}) {
     }
   }
 
+  // Stale-write detection (yume-files heavyApply から移植した発想):
+  // ヘッダの hash= は expand 時点のブロック状態。現在の blockHash と食い違うなら、
+  // この view が作られた後に誰かがそのブロックを変更している → 黙って上書きしない。
+  for (const p of parsed) {
+    if (p.status !== 'ok' || !p.hashOpen) continue;
+    const target = scopeById.get(p.id);
+    if (target && blockHash(target) !== p.hashOpen) {
+      warnings.push({ kind: 'stale-write', id: p.id, viewHash: p.hashOpen, currentHash: blockHash(target) });
+      p.status = 'stale';
+    }
+  }
+
   const FATAL = new Set([
     'root-id-mismatch', 'root-close-mismatch',
     'block-id-mismatch', 'block-hash-tamper',
     'duplicate-id', 'block-no-close',
+    'stale-write',
   ]);
   const hasFatal = warnings.some(w => FATAL.has(w.kind));
 

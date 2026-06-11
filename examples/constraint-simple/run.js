@@ -10,8 +10,6 @@
  *
  * が一気に見られます。
  *
- * これが yume-constraint-voxel から抽出した「エッセンス」です。
- * 複雑な3Dボクセルや特殊ミラー処理は全部削ぎ落とし、
  * 「制約テキストを編集 → 純粋導出で状態が生まれる」だけを極限まで明確に。
  */
 
@@ -54,8 +52,8 @@ meta.commit({
     'Editable surface: ONLY the policy block (pricing:policy). Never store expanded totals in Blocks.',
     'Key blocks: meta:pricing-demo, pricing:policy',
     'Domain tags: usd: values are self-describing (LLM-First Typing).',
-    'Virtual-Map-IDs (stables for parallel YVCP): v001=base_amount, v002=line0, v003=line1, v004=discount_early-bird, v005=discount_friend, v006=tax, v007=shipping. tentative groups: pricing, adjustments, taxes, logistics.',
-    'Key roots: meta:pricing-demo (manifest + vmap doc), pricing:policy (primary constraints source).',
+    'Manifest keys (contract): base, lines, discounts, taxRate, shipping. Workers never invent or rename keys; renames happen only in a mapping layer.',
+    'Key roots: meta:pricing-demo (manifest), pricing:policy (primary constraints source).',
   ].join('\n'),
   tags: ['manifest', 'overview', 'constraint-driven', 'yume-lite'],
   refs: [{ kind: 'policy', target: 'pricing:policy' }],
@@ -197,72 +195,7 @@ console.log(`
 【次のステップ】
   - 自分のドメインで似た「XXXInput + deriveXXX + to/fromBlockContent」を作る。
   - 複雑な combinatorial が必要になったら yume-lite/constraint-template.js をコピー。
-  - もっと本格的な3Dグリッド例が欲しい時は yume-constraint-voxel を読む。
-  - Snow-Ball（E2Eを主軸に coverage 100%まで E2E を雪だるま式に育てる）は voxel が参考。
 `);
-
-// ============================================================
-// 6. YVCP later mapping demo （人間名 vs v00x stables の分離実証）
-// ============================================================
-
-console.log('\n【YVCP later mapping demo】');
-console.log('  人間向け名前（例: \'base\' → \'initialAmount\' や round_score 相当）は *manifest/mapping 層でのみ* 変更。');
-console.log('  並列 constraint/derive コード（deriveQuote + derive*Group群）は v00x stables (v001, v006 等) のみでキーイングし続け、結果は同一。');
-console.log('  （このデモ追加コードが mapping 層を体現；derive 内部ロジック/キーには一切触れず）');
-
-// 既存の afterCmdResult （step4由来）と同一データで mapping 層デモ
-// ここでは mapping 層だけで human name variant を扱う（例: initialAmount を base の別名として manifest で定義した想定）
-const yvcpMappingDemoInput = {
-  // 'base' の human 名を manifest/mapping 層で 'initialAmount' に変更した例（round_score 相当の別名付けも同様）
-  initialAmount: 10000,
-  lines: [
-    { label: 'standard service', amountUsd: 4500 },
-    { label: 'extra options x2', amountUsd: 1800 },
-  ],
-  discounts: [
-    { name: 'early-bird', percent: 0.12 },
-  ],
-  taxRate: 0.10,
-  shipping: 1200,
-};
-
-// mapping 層の責務：human 名を derive が受け付ける形（v00x 割当の元になる input shape）に翻訳
-// ここ以降、deriveQuote 呼び出しは v001=... 等 stables のみで動作（内部 group fns は human field 名を一切見ない）
-function mapHumanNamesToVStable(humanNamed) {
-  return {
-    base: humanNamed.initialAmount != null ? humanNamed.initialAmount : (humanNamed.base || 0),
-    lines: humanNamed.lines || [],
-    discounts: humanNamed.discounts || [],
-    taxRate: humanNamed.taxRate || 0,
-    shipping: humanNamed.shipping || 0,
-  };
-}
-
-const stableInputForDerive = mapHumanNamesToVStable(yvcpMappingDemoInput);
-console.log('  mapping層適用後（initialAmount を v001/base 相当へ解決）で deriveQuote 実行:');
-const yvcpDemoResult = deriveQuote(stableInputForDerive);
-console.log('  >>> derive 結果 (YVCP mapping後):', yvcpDemoResult.total);
-console.log('  summary:', yvcpDemoResult.summary);
-console.log('  applied:', yvcpDemoResult.appliedAdjustments.map(a => `${a.type}:${a.name||a.rate||''} ${a.delta||''}`).join(' | '));
-
-// 同一データで direct derive 呼び（human rename 無し版）と比較 → mapping 層の変更が結果に影響せず identical である実証
-const directSameData = deriveQuote({
-  base: 10000,
-  lines: [
-    { label: 'standard service', amountUsd: 4500 },
-    { label: 'extra options x2', amountUsd: 1800 },
-  ],
-  discounts: [
-    { name: 'early-bird', percent: 0.12 },
-  ],
-  taxRate: 0.10,
-  shipping: 1200,
-});
-const isIdentical = yvcpDemoResult.total === directSameData.total &&
-                    yvcpDemoResult.summary === directSameData.summary;
-console.log('  direct derive (human名 base 直指定) と比較:', directSameData.total, '→ identical?', isIdentical ? 'YES (100% identical result)' : 'NO (error)');
-console.log('  確認: 人間名変更（initialAmount 等）はこの mapping デモブロック内（manifest層相当）のみ。');
-console.log('  deriveQuote 並列コードは v001/v006/v007 等 stables だけで動作 → 結果不変。\n');
 
 console.log('=== デモ終了 ===');
 console.log('node run.js を何度か編集しながら回してみてください。');

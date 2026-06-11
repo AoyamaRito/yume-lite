@@ -3,7 +3,7 @@
  *
  * yume-lite「制約駆動状態導出」のエッセンスを最小で抜き出した、超わかりやすいサンプル。
  *
- * 目的（yume-constraint-voxel から抽出した本質）:
+ * 目的:
  * - 状態は「直接編集しない」。**駆動変数（制約定義）だけを編集**する。
  * - 駆動変数は yume Block に載り、expand/apply の対象になる（小さい！）。
  * - 実際の完全な状態（ここでは「料金 totals」）は、**純粋関数 deriveQuote で常に再導出**される。
@@ -13,8 +13,6 @@
  * - 金額は domainTag(DOMAINS.USD, ...) で自己記述的にする（LLM-First Typing）。
  * - ルール追加・変更が「テキスト1行」で済むのがポイント。
  *
- * voxel の本格実装に比べて：
- * - 3Dループ・ミラー特殊処理・複雑パーサを全部排除
  * - 1つの derive 関数で「金額の畳み込み」だけに集中
  * - テキスト形式が「# コメント + key: value」だけで誰でも即読める
  */
@@ -28,7 +26,7 @@ import { domainTag, DOMAINS, Graph, Block, expand, apply, getSurface, skeleton, 
 
 /**
  * 料金駆動定義の内部表現（parse 後の形）。
- * これが「一次ソース」。voxels や final total はここから導出するだけ。
+ * これが「一次ソース」。final total はここから導出するだけ。
  */
 export function createQuoteInput({
   base = 0,
@@ -111,21 +109,21 @@ export function loadQuoteFromBlockContent(content) {
 }
 
 // ============================================================
-// 3. 純粋導出関数（これが本質） -- YVCP rewrite (Packet 14)
+// 3. 純粋導出関数（これが本質）
 //    駆動定義だけを見て、常に一貫した「現在の料金全体」を返す。
 //    直接 total を触らない。制約（ルール）の出力として生まれる。
-//    関係性を所属する v-group variables (v00x stables) 上の純粋 constraint 関数として表現。
-//    完全に並列実行可能な state behavior 関数群 (deriveBaseGroup(v001), deriveDiscountsGroup(v00x), deriveTaxGroup など) に分割し、独立実行→combine。
-//    返却 state では domain-tagged values を直接使用（applied/results 内に {name, value} 二重構造を作らない）。
+//    関係性は manifest 宣言キー（base, lines, discounts, taxRate, shipping）上の
+//    純粋 constraint 関数として表現。独立・並列実行可能な derive*Group 群に分割し、combine で集約。
+//    返却 state では domain-tagged values を直接使用（{name, value} の二重構造を作らない）。
 // ============================================================
 
 /**
- * 各 v-group に対する純粋な state behavior 関数群。
- * これらは所属 v00x stables のみ（+必要最小 cross input）で動作し、独立・並列可能。
+ * 各グループに対する純粋な state behavior 関数群。
+ * それぞれ所属キーのみ（+必要最小 cross input）で動作し、独立・並列可能。
  * すべて返り値で domain-tagged value を直接用いる。
  */
-function deriveBaseGroup(v001) {
-  const val = v001 || 0;
+function deriveBaseGroup(base) {
+  const val = base || 0;
   return {
     detail: { label: 'base', amount: domainTag(DOMAINS.USD, val) },
     contrib: val,
@@ -133,7 +131,6 @@ function deriveBaseGroup(v001) {
 }
 
 function deriveLinesGroup(lineItems) {
-  // v002, v003, ... に対応する lines group
   return (lineItems || []).map(item => ({
     detail: { label: item.label, amount: domainTag(DOMAINS.USD, item.amountUsd) },
     contrib: item.amountUsd,
@@ -141,7 +138,6 @@ function deriveLinesGroup(lineItems) {
 }
 
 function deriveDiscountsGroup(discountItems, preDiscountRaw) {
-  // v00x (v004=early-bird など discounts group) に対する constraint
   return (discountItems || []).map(item => {
     const deltaRaw = Math.round(preDiscountRaw * item.percent);
     return {
@@ -153,16 +149,16 @@ function deriveDiscountsGroup(discountItems, preDiscountRaw) {
   });
 }
 
-function deriveTaxGroup(v006, taxableRaw) {
-  const taxRaw = Math.round(taxableRaw * (v006 || 0));
+function deriveTaxGroup(taxRate, taxableRaw) {
+  const taxRaw = Math.round(taxableRaw * (taxRate || 0));
   return {
     taxRaw,
     delta: domainTag(DOMAINS.USD, taxRaw), // direct
   };
 }
 
-function deriveShippingGroup(v007) {
-  const shipRaw = v007 || 0;
+function deriveShippingGroup(shipping) {
+  const shipRaw = shipping || 0;
   return {
     shipRaw,
     delta: domainTag(DOMAINS.USD, shipRaw), // direct
@@ -172,36 +168,16 @@ function deriveShippingGroup(v007) {
 /**
  * 駆動定義から完全な料金結果を導出。
  * すべての金額は domainTag で「usd:xxxx」として自己記述。
- * （内部実装は v-group constraint fns に分割済み。public signature / 出力内容は完全互換）
+ * derive は manifest 宣言キー（base, lines, discounts, taxRate, shipping）だけを見る。
  */
 export function deriveQuote(input) {
-  // YVCP: belonging v-group variables (v00x stables) への割り当て
-  // (Virtual-Map-IDs per prior packets: v001=base_amount, v002=line0, v003=line1, v004=discount_early-bird, ...)
-  // tentative groups: pricing (v001+lines), adjustments (discount v00x), taxes (v006), logistics (v007)
-  const v001 = input.base || 0; // base_amount
-
-  const lineItems = (input.lines || []).map((ln, i) => ({
-    v: `v00${2 + i}`,
-    label: ln.label,
-    amountUsd: ln.amountUsd,
-  }));
-
-  const discountItems = (input.discounts || []).map((d, i) => ({
-    v: `v00${4 + i}`,
-    name: d.name,
-    percent: d.percent,
-  }));
-
-  const v006 = input.taxRate || 0; // tax
-  const v007 = input.shipping || 0; // shipping
-
   // 並列可能な state behavior fns をそれぞれ独立に実行（combine で集約）
-  const baseState = deriveBaseGroup(v001);
-  const linesStates = deriveLinesGroup(lineItems);
+  const baseState = deriveBaseGroup(input.base);
+  const linesStates = deriveLinesGroup(input.lines);
   const preDiscountRaw = baseState.contrib + linesStates.reduce((sum, s) => sum + s.contrib, 0);
   const preDiscount = domainTag(DOMAINS.USD, preDiscountRaw);
 
-  const discountsStates = deriveDiscountsGroup(discountItems, preDiscountRaw);
+  const discountsStates = deriveDiscountsGroup(input.discounts, preDiscountRaw);
 
   let running = preDiscountRaw;
   const applied = [];
@@ -221,13 +197,13 @@ export function deriveQuote(input) {
   }
 
   const taxableRaw = running;
-  const taxState = deriveTaxGroup(v006, taxableRaw);
+  const taxState = deriveTaxGroup(input.taxRate, taxableRaw);
   running += taxState.taxRaw;
   if (taxState.taxRaw > 0) {
-    applied.push({ type: 'tax', rate: v006, delta: taxState.delta });
+    applied.push({ type: 'tax', rate: input.taxRate, delta: taxState.delta });
   }
 
-  const shipState = deriveShippingGroup(v007);
+  const shipState = deriveShippingGroup(input.shipping);
   running += shipState.shipRaw;
   if (shipState.shipRaw > 0) {
     applied.push({ type: 'shipping', delta: shipState.delta });
@@ -250,7 +226,7 @@ export function deriveQuote(input) {
 }
 
 // ============================================================
-// 4. yume との統合ヘルパー（voxel と同等のパターン）
+// 4. yume との統合ヘルパー
 // ============================================================
 
 /**
